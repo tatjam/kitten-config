@@ -18,6 +18,15 @@ def reorder_tabs(boss: Boss, tm) -> None:
         tm.mark_tab_bar_dirty()
 
 
+def cleanup_empty_tabs(boss: Boss, tm) -> None:
+    if not hasattr(boss, "_virtual_slots"):
+        return
+    for tab in list(tm.tabs):
+        if not tab.windows:
+            boss._virtual_slots.pop(tab.id, None)
+            boss.close_tab(tab)
+
+
 @result_handler(no_ui=True)
 def handle_result(
     args: List[str], answer: str, target_window_id: int, boss: Boss
@@ -25,10 +34,16 @@ def handle_result(
     if len(args) < 2:
         return
 
-    slot = int(args[1])
+    try:
+        slot = int(args[1])
+    except (ValueError, IndexError):
+        return
+
     tm = boss.active_tab_manager
     if tm is None or not tm.tabs:
         return
+
+    cleanup_empty_tabs(boss, tm)
 
     src_tab = boss.active_tab
     window = boss.active_window
@@ -52,16 +67,23 @@ def handle_result(
 
     if target_tab:
         if src_tab is not target_tab:
-            src_tab.detach_window(window)
-            target_tab.add_window(window)
+            # Use the documented remote-control call, not internal Tab methods.
+            boss.call_remote_control(
+                window,
+                (
+                    "detach-window",
+                    f"--match=id:{window.id}",
+                    f"--target-tab=id:{target_tab.id}",
+                ),
+            )
             boss.set_active_tab(target_tab)
             target_tab.set_active_window(window)
             if not target_tab.title.startswith(f"[{slot}]"):
                 boss.set_tab_title(f"[{slot}]")
-            if not src_tab.windows:
-                boss.close_tab(src_tab)
     else:
-        boss.detach_window("new-tab")
+        boss.detach_window(
+            "new-tab"
+        )  # this one IS the real Boss API — string action only
         new_tab = boss.active_tab
         if new_tab:
             boss._virtual_slots[new_tab.id] = slot
